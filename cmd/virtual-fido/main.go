@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -165,14 +167,38 @@ func (p *promptApprover) runSignaling() {
 	}
 }
 
+func notifyDesktop(title, body string, timeoutMs int) {
+	go func() {
+		_ = exec.Command(
+			"gdbus", "call", "--session",
+			"--dest", "org.freedesktop.Notifications",
+			"--object-path", "/org/freedesktop/Notifications",
+			"--method", "org.freedesktop.Notifications.Notify",
+			"Virtual FIDO", "0", "security-high",
+			title, body, "[]", "{}", strconv.Itoa(timeoutMs),
+		).Run()
+	}()
+}
+
 func (p *promptApprover) waitApproval(timeout time.Duration) bool {
 	if p.alwaysApprove {
 		return true
 	}
 
+	var pendingFile string
+	if p.signalFile != "" {
+		// Remove any stale touch signal that arrived more than 1.5s before this prompt started
+		if st, err := os.Stat(p.signalFile); err == nil && time.Since(st.ModTime()) > 1500*time.Millisecond {
+			_ = os.Remove(p.signalFile)
+		}
+		pendingFile = filepath.Join(filepath.Dir(p.signalFile), "pending.prompt")
+		_ = os.WriteFile(pendingFile, []byte(time.Now().Format(time.RFC3339Nano)+"\n"), 0o600)
+		defer func() { _ = os.Remove(pendingFile) }()
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -187,7 +213,7 @@ func (p *promptApprover) waitApproval(timeout time.Duration) bool {
 		case <-ticker.C:
 			if p.signalFile != "" {
 				if _, err := os.Stat(p.signalFile); err == nil {
-					os.Remove(p.signalFile)
+					_ = os.Remove(p.signalFile)
 					return true
 				}
 			}
@@ -211,9 +237,15 @@ func (p *promptApprover) ApproveClientAction(
 	switch action {
 	case fido_client.ClientActionFIDOMakeCredential:
 		fmt.Printf("Approval Required: Register for %q. Type 'touch' or 'y' to approve.\n", rp)
+		if p.signalFile != "" {
+			notifyDesktop("Fingerprint / FIDO2 Touch Required", fmt.Sprintf("Registering %s — trigger touch signal to approve", rp), 15000)
+		}
 		ok := p.waitApproval(30 * time.Second)
 		if ok {
 			fmt.Printf("Approved registration for %q\n", rp)
+			if p.signalFile != "" {
+				notifyDesktop("Fingerprint Approved", fmt.Sprintf("Approved registration for %s", rp), 3000)
+			}
 		} else {
 			fmt.Printf("Denied registration for %q\n", rp)
 		}
@@ -250,19 +282,31 @@ func (p *promptApprover) ApproveClientAction(
 		}
 
 		fmt.Printf("Approval Required: Login for %q user %q. Type 'touch' or 'y' to approve.\n", rp, user)
+		if p.signalFile != "" {
+			notifyDesktop("Fingerprint / FIDO2 Touch Required", fmt.Sprintf("Sign in to %s (%s) — trigger touch signal to approve", rp, user), 15000)
+		}
 		ok := p.waitApproval(30 * time.Second)
 		if ok {
 			fmt.Printf("Approved login for %q user %q\n", rp, user)
+			if p.signalFile != "" {
+				notifyDesktop("Fingerprint Approved", fmt.Sprintf("Approved sign-in for %s (%s)", rp, user), 3000)
+			}
 		} else {
 			fmt.Printf("Denied login for %q user %q\n", rp, user)
 		}
 		return ok, 0
 	case fido_client.ClientActionU2FRegister:
 		fmt.Println("Approval Required: U2F registration. Type 'touch' or 'y' to approve.")
+		if p.signalFile != "" {
+			notifyDesktop("Fingerprint / FIDO2 Touch Required", "U2F registration — trigger touch signal to approve", 15000)
+		}
 		ok := p.waitApproval(30 * time.Second)
 		return ok, 0
 	case fido_client.ClientActionU2FAuthenticate:
 		fmt.Println("Approval Required: U2F authentication. Type 'touch' or 'y' to approve.")
+		if p.signalFile != "" {
+			notifyDesktop("Fingerprint / FIDO2 Touch Required", "U2F authentication — trigger touch signal to approve", 15000)
+		}
 		ok := p.waitApproval(30 * time.Second)
 		return ok, 0
 	}

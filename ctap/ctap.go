@@ -115,10 +115,24 @@ func (server *CTAPServer) HandleMessage(data []byte) []byte {
 		return server.handleGetAssertion(data[1:])
 	case ctapCommandClientPIN:
 		return server.handleClientPIN(data[1:])
+	case ctapCommandCredentialMgmt:
+		if len(data) == 1 {
+			return server.handleSelection()
+		}
+		ctapLogger.Printf("ERROR: Invalid/Unsupported CTAP Command: %d\n", command)
+		return []byte{byte(ctap1ErrInvalidCommand)}
 	default:
 		ctapLogger.Printf("ERROR: Invalid/Unsupported CTAP Command: %d\n", command)
 		return []byte{byte(ctap1ErrInvalidCommand)}
 	}
+}
+
+func (server *CTAPServer) handleSelection() []byte {
+	if !server.client.ApproveAccountCreation("Biometric / Security Key Selection", "fido2.selection") {
+		ctapLogger.Printf("ERROR: Unapproved action (Authenticator selection)\n")
+		return []byte{byte(ctap2ErrOperationDenied)}
+	}
+	return []byte{byte(ctap1ErrSuccess)}
 }
 
 type attestedCredentialData struct {

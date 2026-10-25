@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	virtual_fido "github.com/bulwarkid/virtual-fido"
@@ -112,7 +113,7 @@ func runUhidServer(client virtual_fido.FIDOClient, deviceName string) {
 
 	go func() {
 		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		cancel()
 	}()
